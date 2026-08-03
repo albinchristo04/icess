@@ -1,21 +1,5 @@
 #!/usr/bin/env python3
-"""
-fetch_tracksino.py
-
-Fetches data from Tracksino API and stores results to a JSON file.
-
-Features:
-- Uses Bearer token (from --token or TRACKSINO_TOKEN env var)
-- Pages through results
-- Optionally appends to an existing JSON file (--append)
-- Optionally deduplicates on a specified key (--dedupe-key)
-- Pretty-print option (--pretty)
-
-Example:
-  export TRACKSINO_TOKEN=b8f11ee0-70ec-419f-91b0-76fac8714a14
-  python fetch_tracksino.py --table-id 170 --period 24hours --per-page 100 \
-    --output tracksino_data.json --append --pretty --dedupe-key id
-"""
+# (full script with safer dedupe behavior)
 import argparse
 import json
 import os
@@ -28,7 +12,6 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 BASE_URL = "https://api.tracksino.com/icefishing_history"
-
 
 def create_session(retries: int = 3, backoff_factor: float = 0.5) -> requests.Session:
     s = requests.Session()
@@ -43,7 +26,6 @@ def create_session(retries: int = 3, backoff_factor: float = 0.5) -> requests.Se
     s.mount("http://", adapter)
     return s
 
-
 def extract_items(resp_json: Any) -> List[Any]:
     if isinstance(resp_json, list):
         return resp_json
@@ -56,7 +38,6 @@ def extract_items(resp_json: Any) -> List[Any]:
             return lists[0]
     return []
 
-
 def get_total_pages_from_meta(resp_json: Any) -> Optional[int]:
     if isinstance(resp_json, dict):
         if "total_pages" in resp_json and isinstance(resp_json["total_pages"], int):
@@ -68,7 +49,6 @@ def get_total_pages_from_meta(resp_json: Any) -> Optional[int]:
             if "pages" in meta and isinstance(meta["pages"], int):
                 return meta["pages"]
     return None
-
 
 def fetch_all(
     token: str,
@@ -128,7 +108,6 @@ def fetch_all(
 
     return all_items
 
-
 def load_existing(path: str) -> Dict[str, Any]:
     if not os.path.exists(path):
         return {"fetched_at": None, "count": 0, "items": []}
@@ -136,19 +115,16 @@ def load_existing(path: str) -> Dict[str, Any]:
         try:
             data = json.load(fh)
         except Exception:
-            # corrupted or non-JSON: back up and start fresh
             backup = path + ".bak"
             print(f"Warning: failed to parse existing {path}. Backing up to {backup}", file=sys.stderr)
             os.rename(path, backup)
             return {"fetched_at": None, "count": 0, "items": []}
     if "items" not in data or not isinstance(data["items"], list):
-        # Unexpected shape: back up and start fresh
         backup = path + ".bak"
         print(f"Warning: existing {path} has unexpected format. Backing up to {backup}", file=sys.stderr)
         os.rename(path, backup)
         return {"fetched_at": None, "count": 0, "items": []}
     return data
-
 
 def save_out(path: str, items: List[Any], pretty: bool = False) -> None:
     out_obj = {"fetched_at": int(time.time()), "count": len(items), "items": items}
@@ -158,19 +134,28 @@ def save_out(path: str, items: List[Any], pretty: bool = False) -> None:
         else:
             json.dump(out_obj, fh, ensure_ascii=False)
 
-
 def append_items(existing: Dict[str, Any], new_items: List[Any], dedupe_key: Optional[str]) -> List[Any]:
     existing_list = existing.get("items", []) or []
     if not dedupe_key:
         return existing_list + new_items
+
+    # Warn and skip dedupe if dedupe_key is not present in any item
+    combined_preview = (existing_list[:10] + new_items[:10])  # cheap check
+    key_present = any(isinstance(it, dict) and dedupe_key in it for it in combined_preview)
+    if not key_present:
+        # More thorough check if small data, otherwise warn
+        if len(existing_list) + len(new_items) <= 2000:
+            key_present = any(isinstance(it, dict) and dedupe_key in it for it in (existing_list + new_items))
+        if not key_present:
+            print(f"Warning: dedupe key '{dedupe_key}' not found in items — skipping dedupe.", file=sys.stderr)
+            return existing_list + new_items
+
     seen = set()
     out = []
-    # keep existing items in order
     for it in existing_list:
         key = it.get(dedupe_key) if isinstance(it, dict) else None
         out.append(it)
         seen.add(key)
-    # append only new items whose dedupe_key is not in seen
     for it in new_items:
         key = it.get(dedupe_key) if isinstance(it, dict) else None
         if key in seen:
@@ -178,7 +163,6 @@ def append_items(existing: Dict[str, Any], new_items: List[Any], dedupe_key: Opt
         out.append(it)
         seen.add(key)
     return out
-
 
 def main():
     p = argparse.ArgumentParser(description="Fetch Tracksino icefishing history and save to JSON")
@@ -191,7 +175,7 @@ def main():
     p.add_argument("--output", "-o", default="tracksino_data.json", help="output JSON filename")
     p.add_argument("--pretty", action="store_true", help="Pretty-print JSON")
     p.add_argument("--append", action="store_true", help="Append new items to existing JSON file instead of overwriting")
-    p.add_argument("--dedupe-key", type=str, default=None, help="If provided, deduplicate by this key (e.g., 'id')")
+    p.add_argument("--dedupe-key", type=str, default=None, help="If provided, deduplicate by this key (e.g., 'round_code')")
     args = p.parse_args()
 
     token = args.token or os.getenv("TRACKSINO_TOKEN")
@@ -220,7 +204,6 @@ def main():
     else:
         save_out(args.output, new_items, pretty=args.pretty)
         print(f"Saved {len(new_items)} items to {args.output}")
-
 
 if __name__ == "__main__":
     main()
