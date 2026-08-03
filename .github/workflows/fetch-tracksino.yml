@@ -13,7 +13,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          persist-credentials: true  # so we can push with GITHUB_TOKEN
+          persist-credentials: true
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -23,13 +23,12 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-    - name: Run fetch script
+      - name: Run fetch script
         env:
           TRACKSINO_TOKEN: ${{ secrets.TRACKSINO_TOKEN }}
         run: |
           chmod +x ./fetch_tracksino.py || true
-          python ./fetch_tracksino.py --table-id 170 --period 24hours --per-page 100 \
-            --output tracksino_data.json --append --pretty --dedupe-key round_code
+          python ./fetch_tracksino.py --table-id 170 --period 24hours --per-page 100 --output tracksino_data.json --append --pretty --dedupe-key round_code
 
       - name: Commit and push results (if changed)
         env:
