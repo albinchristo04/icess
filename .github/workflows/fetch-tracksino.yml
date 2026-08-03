@@ -1,0 +1,46 @@
+name: Fetch Tracksino data hourly
+
+on:
+  schedule:
+    # Every hour at minute 0
+    - cron: '0 * * * *'
+  workflow_dispatch: {}
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true  # so we can push with GITHUB_TOKEN
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run fetch script
+        env:
+          TRACKSINO_TOKEN: ${{ secrets.TRACKSINO_TOKEN }}
+        run: |
+          chmod +x ./fetch_tracksino.py || true
+          python ./fetch_tracksino.py --table-id 170 --period 24hours --per-page 100 \
+            --output tracksino_data.json --append --pretty --dedupe-key id
+
+      - name: Commit and push results (if changed)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tracksino_data.json || true
+          if ! git diff --staged --quiet; then
+            git commit -m "chore(tracksino): append fetched data $(date -u +"%Y-%m-%dT%H:%M:%SZ")" || true
+            git push
+          else
+            echo "No changes to commit"
+          fi
