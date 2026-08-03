@@ -1,6 +1,6 @@
 {
-  "fetched_at": 1785754215,
-  "count": 2519,
+  "fetched_at": 1785754433,
+  "count": 2522,
   "items": [
     {
       "round_code": "idNhhY2_djbY",
@@ -27710,7 +27710,40 @@
       "total_winners": 1410,
       "total_payout": 3103,
       "when_local": "2026-08-03T16:15:14+05:30"
+    },
+    {
+      "round_code": "idNhhY2_djIA",
+      "when": 1785754303,
+      "result": 200,
+      "sectorid": 46,
+      "multiplier": 5,
+      "bonusmultiplier": 0,
+      "total_winners": 6216,
+      "total_payout": 12544,
+      "when_local": "2026-08-03T16:21:43+05:30"
+    },
+    {
+      "round_code": "idNhhY2_djIs",
+      "when": 1785754283,
+      "result": 2,
+      "sectorid": 35,
+      "multiplier": 1,
+      "bonusmultiplier": 0,
+      "total_winners": 1265,
+      "total_payout": 2448,
+      "when_local": "2026-08-03T16:21:23+05:30"
+    },
+    {
+      "round_code": "idNhhY2_djLE",
+      "when": 1785754183,
+      "result": 100,
+      "sectorid": 39,
+      "multiplier": 50,
+      "bonusmultiplier": 0,
+      "total_winners": 7082,
+      "total_payout": 177587,
+      "when_local": "2026-08-03T16:19:43+05:30"
     }
   ],
-  "fetched_at_local": "2026-08-03T16:20:15+05:30"
+  "fetched_at_local": "2026-08-03T16:23:53+05:30"
 }
