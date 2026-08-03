@@ -1,17 +1,41 @@
 #!/usr/bin/env python3
-# (full script with safer dedupe behavior)
+"""
+fetch_tracksino.py
+
+Fetches data from Tracksino API and stores results to a JSON file.
+
+Adds a human-readable local time for the "when" timestamp (default Asia/Kolkata)
+by adding a new field `when_local` to each item and `fetched_at_local` to the output.
+
+Usage example:
+  export TRACKSINO_TOKEN=b8f11ee0-70ec-419f-91b0-76fac8714a14
+  python fetch_tracksino.py --table-id 170 --period 24hours --per-page 100 \
+    --output tracksino_data.json --append --pretty --dedupe-key round_code
+
+Notes:
+- This script uses zoneinfo (Python 3.9+). GitHub Actions using `setup-python` with '3.x'
+  will normally have zoneinfo available. If you run on older Python, install
+  backports.zoneinfo or upgrade Python.
+"""
 import argparse
 import json
 import os
 import sys
 import time
 from typing import Any, Dict, List, Optional
+from datetime import datetime, timezone
 
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 BASE_URL = "https://api.tracksino.com/icefishing_history"
+
+try:
+    from zoneinfo import ZoneInfo  # Python 3.9+
+except Exception:
+    ZoneInfo = None
+
 
 def create_session(retries: int = 3, backoff_factor: float = 0.5) -> requests.Session:
     s = requests.Session()
@@ -26,6 +50,7 @@ def create_session(retries: int = 3, backoff_factor: float = 0.5) -> requests.Se
     s.mount("http://", adapter)
     return s
 
+
 def extract_items(resp_json: Any) -> List[Any]:
     if isinstance(resp_json, list):
         return resp_json
@@ -38,6 +63,7 @@ def extract_items(resp_json: Any) -> List[Any]:
             return lists[0]
     return []
 
+
 def get_total_pages_from_meta(resp_json: Any) -> Optional[int]:
     if isinstance(resp_json, dict):
         if "total_pages" in resp_json and isinstance(resp_json["total_pages"], int):
@@ -49,6 +75,7 @@ def get_total_pages_from_meta(resp_json: Any) -> Optional[int]:
             if "pages" in meta and isinstance(meta["pages"], int):
                 return meta["pages"]
     return None
+
 
 def fetch_all(
     token: str,
@@ -108,6 +135,7 @@ def fetch_all(
 
     return all_items
 
+
 def load_existing(path: str) -> Dict[str, Any]:
     if not os.path.exists(path):
         return {"fetched_at": None, "count": 0, "items": []}
@@ -115,40 +143,76 @@ def load_existing(path: str) -> Dict[str, Any]:
         try:
             data = json.load(fh)
         except Exception:
+            # corrupted or non-JSON: back up and start fresh
             backup = path + ".bak"
             print(f"Warning: failed to parse existing {path}. Backing up to {backup}", file=sys.stderr)
             os.rename(path, backup)
             return {"fetched_at": None, "count": 0, "items": []}
     if "items" not in data or not isinstance(data["items"], list):
+        # Unexpected shape: back up and start fresh
         backup = path + ".bak"
         print(f"Warning: existing {path} has unexpected format. Backing up to {backup}", file=sys.stderr)
         os.rename(path, backup)
         return {"fetched_at": None, "count": 0, "items": []}
     return data
 
-def save_out(path: str, items: List[Any], pretty: bool = False) -> None:
+
+def add_local_times_to_items(items: List[Any], tz_name: Optional[str]) -> None:
+    if not tz_name:
+        return
+    if ZoneInfo is None:
+        print("Warning: zoneinfo.ZoneInfo not available in this Python runtime; skipping local-time conversion.", file=sys.stderr)
+        return
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception as e:
+        print(f"Warning: cannot load timezone '{tz_name}': {e}; skipping local-time conversion.", file=sys.stderr)
+        return
+
+    for it in items:
+        if isinstance(it, dict) and "when" in it and isinstance(it["when"], (int, float)):
+            try:
+                dt = datetime.fromtimestamp(int(it["when"]), tz=timezone.utc).astimezone(tz)
+                it["when_local"] = dt.isoformat()
+            except Exception:
+                # ignore conversion failures per-item
+                pass
+
+
+def save_out(path: str, items: List[Any], pretty: bool = False, tz_name: Optional[str] = "Asia/Kolkata") -> None:
+    # add local times to items before saving
+    add_local_times_to_items(items, tz_name)
+
     out_obj = {"fetched_at": int(time.time()), "count": len(items), "items": items}
+    # also add a local representation of fetched_at if possible
+    if tz_name and ZoneInfo is not None:
+        try:
+            tz = ZoneInfo(tz_name)
+            out_obj["fetched_at_local"] = datetime.fromtimestamp(out_obj["fetched_at"], tz=timezone.utc).astimezone(tz).isoformat()
+        except Exception:
+            pass
+
     with open(path, "w", encoding="utf-8") as fh:
         if pretty:
             json.dump(out_obj, fh, ensure_ascii=False, indent=2)
         else:
             json.dump(out_obj, fh, ensure_ascii=False)
 
+
 def append_items(existing: Dict[str, Any], new_items: List[Any], dedupe_key: Optional[str]) -> List[Any]:
     existing_list = existing.get("items", []) or []
     if not dedupe_key:
         return existing_list + new_items
 
-    # Warn and skip dedupe if dedupe_key is not present in any item
-    combined_preview = (existing_list[:10] + new_items[:10])  # cheap check
+    # Warn and skip dedupe if dedupe_key is not present in items
+    combined_preview = (existing_list[:10] + new_items[:10])
     key_present = any(isinstance(it, dict) and dedupe_key in it for it in combined_preview)
     if not key_present:
-        # More thorough check if small data, otherwise warn
         if len(existing_list) + len(new_items) <= 2000:
             key_present = any(isinstance(it, dict) and dedupe_key in it for it in (existing_list + new_items))
-        if not key_present:
-            print(f"Warning: dedupe key '{dedupe_key}' not found in items — skipping dedupe.", file=sys.stderr)
-            return existing_list + new_items
+    if not key_present:
+        print(f"Warning: dedupe key '{dedupe_key}' not found in items — skipping dedupe.", file=sys.stderr)
+        return existing_list + new_items
 
     seen = set()
     out = []
@@ -164,6 +228,7 @@ def append_items(existing: Dict[str, Any], new_items: List[Any], dedupe_key: Opt
         seen.add(key)
     return out
 
+
 def main():
     p = argparse.ArgumentParser(description="Fetch Tracksino icefishing history and save to JSON")
     p.add_argument("--token", "-t", help="Bearer token. If omitted, read TRACKSINO_TOKEN env var.")
@@ -176,6 +241,7 @@ def main():
     p.add_argument("--pretty", action="store_true", help="Pretty-print JSON")
     p.add_argument("--append", action="store_true", help="Append new items to existing JSON file instead of overwriting")
     p.add_argument("--dedupe-key", type=str, default=None, help="If provided, deduplicate by this key (e.g., 'round_code')")
+    p.add_argument("--tz", type=str, default="Asia/Kolkata", help="IANA timezone name to add local times (default Asia/Kolkata), pass empty string to disable")
     args = p.parse_args()
 
     token = args.token or os.getenv("TRACKSINO_TOKEN")
@@ -196,14 +262,17 @@ def main():
         print("Failed to fetch data:", e, file=sys.stderr)
         sys.exit(1)
 
+    tz_name = args.tz if args.tz != "" else None
+
     if args.append:
         existing = load_existing(args.output)
         combined = append_items(existing, new_items, args.dedupe_key)
-        save_out(args.output, combined, pretty=args.pretty)
+        save_out(args.output, combined, pretty=args.pretty, tz_name=tz_name)
         print(f"Appended {len(new_items)} items -> total {len(combined)} items saved to {args.output}")
     else:
-        save_out(args.output, new_items, pretty=args.pretty)
+        save_out(args.output, new_items, pretty=args.pretty, tz_name=tz_name)
         print(f"Saved {len(new_items)} items to {args.output}")
+
 
 if __name__ == "__main__":
     main()
